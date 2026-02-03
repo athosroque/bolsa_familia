@@ -1,30 +1,35 @@
 import os
 import requests
-import pandas as pd
+import time
 from datetime import datetime
 import json
 import logging
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from src.db.connection import get_connection
+import psycopg2
 
 # Configure Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# API Constants
+# API Configuration
 BASE_URL = "https://portaldatransparencia.gov.br/api-de-dados"
 ENDPOINT = "/bolsa-familia-por-municipio"
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; PortalTransparenciaPipeline/1.0)",
-    "Accept": "application/json"
+    "Accept": "application/json",
+    # "CHAVE-API-PORTAL": os.getenv("API_KEY") # Add if you have one
 }
 
-def fetch_data(mes_ano, codigo_ibge, pagina=1):
-    """
-    Fetches data from the API with pagination.
-    Args:
-        mes_ano (str): YYYYMM format (e.g., '202401')
-        codigo_ibge (str): IBGE code for the municipality (e.g., '3550308' for Sao Paulo)
-        pagina (int): Page number
-    """
+def get_session():
+    """Create a requests session with retry logic"""
+    session = requests.Session()
+    retries = Retry(total=3, backoff_factor=2, status_forcelist=[429, 500, 502, 503, 504])
+    session.mount('https://', HTTPAdapter(max_retries=retries))
+    return session
+
+def fetch_data(session, mes_ano, codigo_ibge, pagina=1):
+    """Fetches data from the API with pagination and rate limiting."""
     url = f"{BASE_URL}{ENDPOINT}"
     params = {
         "mesAno": mes_ano,
@@ -33,39 +38,48 @@ def fetch_data(mes_ano, codigo_ibge, pagina=1):
     }
     
     try:
-        logging.info(f"Fetching {url} with params {params}")
-        response = requests.get(url, headers=HEADERS, params=params, timeout=30)
+        logging.info(f"Fetching page {pagina} for {mes_ano}/{codigo_ibge}...")
+        response = session.get(url, headers=HEADERS, params=params, timeout=30)
         response.raise_for_status()
+        time.sleep(1) # Rate limiting: 1s pause
         return response.json()
     except requests.exceptions.RequestException as e:
         logging.error(f"API Request failed: {e}")
         return None
 
-def save_raw_data(data, mes_ano, codigo_ibge):
+def save_raw_data(data, mes_ano, codigo_ibge, pagina):
     """
     Saves the full JSON response to Postgres raw_bolsa_familia table.
+    Skips if data already exists for this page.
     """
     conn = get_connection()
     if not conn:
-        logging.error("Database connection failed. Skipping save.")
         return
 
     try:
         cur = conn.cursor()
         query = """
-            INSERT INTO raw_bolsa_familia (reference_date, municipality_code, api_response)
-            VALUES (%s, %s, %s)
+            INSERT INTO raw_bolsa_familia 
+            (reference_date, municipality_code, page_number, api_response)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (reference_date, municipality_code, page_number) 
+            DO NOTHING
         """
-        # Convert YYYYMM to Date object (1st day of month)
         date_obj = datetime.strptime(mes_ano, "%Y%m").date()
         
-        # Insert generic JSON dump
-        cur.execute(query, (date_obj, codigo_ibge, json.dumps(data)))
+        cur.execute(query, (date_obj, codigo_ibge, pagina, json.dumps(data)))
+        rows_affected = cur.rowcount
         conn.commit()
-        logging.info(f"Saved {len(data) if isinstance(data, list) else 1} records to database.")
+        
+        if rows_affected > 0:
+            logging.info(f"✅ Saved page {pagina} ({len(data)} records).")
+        else:
+            logging.info(f"⚠️ Page {pagina} already exists. Skipped.")
+            
         cur.close()
     except Exception as e:
         logging.error(f"Database insertion failed: {e}")
+        conn.rollback()
     finally:
         conn.close()
 
@@ -74,32 +88,33 @@ def main():
     MES_ANO = "202401"
     CODIGO_IBGE = "3550308" 
     
-    logging.info("Starting ELT process...")
+    logging.info("Starting ELT process (Resilient Mode)...")
     
-    # Init DB (failsafe if not run before)
-    # from src.db.connection import init_db
-    # init_db()
+    # Ensure DB schema is up to date
+    from src.db.connection import init_db
+    init_db()
 
+    session = get_session()
     page = 1
+    
     while True:
-        data = fetch_data(MES_ANO, CODIGO_IBGE, page)
+        data = fetch_data(session, MES_ANO, CODIGO_IBGE, page)
         
         if not data:
-            logging.info("No more data or error occurred.")
+            logging.info("No data returned. Ending process.")
             break
             
-        save_raw_data(data, MES_ANO, CODIGO_IBGE)
+        save_raw_data(data, MES_ANO, CODIGO_IBGE, page)
         
-        # Check if we should continue (API specific logic needed here)
-        # For this specific endpoint, let's assume if we get < 15 items it's the end?
-        # Or simple pagination check.
+        # Checking for empty list usually means end of pagination
         if isinstance(data, list) and len(data) == 0:
+            logging.info("Reached end of data (empty list).")
             break
             
         page += 1
-        # Safety break for testing
-        if page > 5: 
-            logging.info("Safety limit reached (5 pages). Stopping.")
+        
+        if page > 100: # Safety cap increased
+            logging.info("Safety limit (100) reached.")
             break
 
 if __name__ == "__main__":

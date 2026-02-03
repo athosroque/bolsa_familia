@@ -5,10 +5,10 @@ from psycopg2.extras import Json
 
 # Database connection parameters - in production use env vars
 DB_CONFIG = {
-    "dbname": "portal_transparencia",
-    "user": "umbrel",
-    "password": "umbrel_password_change_me",
-    "host": os.getenv("DB_HOST", "localhost"), # Default to localhost, use 'db' in docker
+    "dbname": os.getenv("POSTGRES_DB", "portal_transparencia"),
+    "user": os.getenv("POSTGRES_USER", "umbrel"),
+    "password": os.getenv("POSTGRES_PASSWORD", "umbrel_password_change_me"),
+    "host": os.getenv("DB_HOST", "localhost"),
     "port": "5432"
 }
 
@@ -35,9 +35,21 @@ def init_db():
                     ingested_at TIMESTAMP DEFAULT NOW(),
                     reference_date DATE,
                     municipality_code TEXT,
-                    api_response JSONB
+                    page_number INTEGER,
+                    api_response JSONB,
+                    UNIQUE(reference_date, municipality_code, page_number)
                 );
             """)
+            # Migration for existing tables (safe to run)
+            try:
+                cur.execute("ALTER TABLE raw_bolsa_familia ADD COLUMN IF NOT EXISTS page_number INTEGER;")
+                cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_dedup ON raw_bolsa_familia (reference_date, municipality_code, page_number);")
+                conn.commit()
+            except Exception as e:
+                print(f"Migration warning: {e}")
+                conn.rollback()
+
+            conn.commit()
             conn.commit()
             print("Database initialized successfully.")
             cur.close()

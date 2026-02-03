@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "🚀 Starting Project Initialization (Dockerized)..."
+echo "🚀 Construir os containers, iniciar o banco de dados e rodar um script de verificação. (Dockerized)..."
 
 # 1. Build and Start Containers
 echo "🐳 Building Docker images..."

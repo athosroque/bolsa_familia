@@ -1,0 +1,37 @@
+services:
+  db:
+    image: postgres:16
+    container_name: portal_transparencia_db
+    restart: always
+    environment:
+      POSTGRES_USER: umbrel
+      POSTGRES_PASSWORD: umbrel_password_change_me
+      POSTGRES_DB: portal_transparencia
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+
+  # Optional: PGAdmin for easier database management via browser
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: portal_transparencia_pgadmin
+    restart: always
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@umbrel.local
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    depends_on:
+      - db
+
+  etl:
+    build: .
+    container_name: portal_transparencia_etl
+    depends_on:
+      - db
+    environment:
+      - DB_HOST=db
+    volumes:
+      - .:/app
+    command: tail -f /dev/null # Keep alive for manual execution

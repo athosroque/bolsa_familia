@@ -1,0 +1,24 @@
+[
+    {
+        "id": 16801131,
+        "dataReferencia": "2022-09-01",
+        "municipio": {
+            "codigoIBGE": "3550308",
+            "nomeIBGE": "SÃO PAULO",
+            "codigoRegiao": "3",
+            "nomeRegiao": "SUDESTE",
+            "pais": "BRASIL",
+            "uf": {
+                "sigla": "SP",
+                "nome": "SÃO PAULO"
+            }
+        },
+        "tipo": {
+            "id": 7,
+            "descricao": "Auxílio Brasil",
+            "descricaoDetalhada": "Auxílio Brasil"
+        },
+        "valor": 278105844.0,
+        "quantidadeBeneficiados": 594821
+    }
+]
